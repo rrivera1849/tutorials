@@ -148,11 +148,14 @@ use_cuda = torch.cuda.is_available()
 # ``word2count`` to use to later replace rare words.
 #
 
+# Start of Sentence and End of Sentence tokens
 SOS_token = 0
 EOS_token = 1
 
-
 class Lang:
+    """Keep a dictionary of word -> index and index -> work
+       as well as the word counts to replace rare words.
+    """
     def __init__(self, name):
         self.name = name
         self.word2index = {}
@@ -206,6 +209,10 @@ def normalizeString(s):
 #
 
 def readLangs(lang1, lang2, reverse=False):
+    """Each example in the data file is separated by a space and the
+       format of each line is LANG-1<TAB>LANG-2 the reverse flag allows
+       us to go from LANG2 to LANG1.
+    """
     print("Reading lines...")
 
     # Read the file and split into lines
@@ -214,6 +221,8 @@ def readLangs(lang1, lang2, reverse=False):
 
     # Split every line into pairs and normalize
     pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
+    
+    # pairs = [['0-LANG1', '0-LANG2'], ['1-LANG1', '1-LANG2']]:w
 
     # Reverse pairs, make Lang instances
     if reverse:
@@ -247,14 +256,18 @@ eng_prefixes = (
     "they are", "they re "
 )
 
-
 def filterPair(p):
+    """Given some pair, make sure that it is less than 10 words long,
+       and does not start with any of the english prefixes above.
+    """
     return len(p[0].split(' ')) < MAX_LENGTH and \
         len(p[1].split(' ')) < MAX_LENGTH and \
         p[1].startswith(eng_prefixes)
 
 
 def filterPairs(pairs):
+    """For each pair, keep only those who meet all criteria.
+    """
     return [pair for pair in pairs if filterPair(pair)]
 
 
@@ -267,6 +280,11 @@ def filterPairs(pairs):
 #
 
 def prepareData(lang1, lang2, reverse=False):
+    """First, we will read our dataset and split into lines.
+       Then we split our lines into pairs and then normalize and filter
+       them by content. 
+       With these normalized and filtered pairs, we will make a word list.
+    """
     input_lang, output_lang, pairs = readLangs(lang1, lang2, reverse)
     print("Read %s sentence pairs" % len(pairs))
     pairs = filterPairs(pairs)
@@ -336,7 +354,19 @@ print(random.choice(pairs))
 #
 
 class EncoderRNN(nn.Module):
+    """Encodes the input sequence into one vector (hidden state) that contains
+       all of the information, this can then be fed into a Decoder to generate
+       our translation. 
+    """
     def __init__(self, input_size, hidden_size, n_layers=1):
+        """Initializes the Encoder variables.
+          
+        Keyword Arguments:
+          input_size: size of the vocabulary size for the input language
+          hidden_size: size of the embeddings as well as size of the inputs
+                       and hidden layers inside GRU
+          n_layers: number of recurrent layers
+        """
         super(EncoderRNN, self).__init__()
         self.n_layers = n_layers
         self.hidden_size = hidden_size
@@ -345,6 +375,10 @@ class EncoderRNN(nn.Module):
         self.gru = nn.GRU(hidden_size, hidden_size)
 
     def forward(self, input, hidden):
+        """Forward pass of the network, given some input and initial hidden
+           state it will return the next output and hidden state.
+        """
+        # Need to match the hidden state dimensions (1, 1, hidden_size)
         embedded = self.embedding(input).view(1, 1, -1)
         output = embedded
         for i in range(self.n_layers):
@@ -352,6 +386,9 @@ class EncoderRNN(nn.Module):
         return output, hidden
 
     def initHidden(self):
+        """Initializes the hidden state of the GRU network of size
+           (1, 1, hidden-size).
+        """
         result = Variable(torch.zeros(1, 1, self.hidden_size))
         if use_cuda:
             return result.cuda()
@@ -387,7 +424,15 @@ class EncoderRNN(nn.Module):
 #
 
 class DecoderRNN(nn.Module):
+    """A Decoder is an RNN that takes the output vector(s) of the Encoder
+       RNN and outputs a sequence of words.
+    """
     def __init__(self, hidden_size, output_size, n_layers=1):
+        """Initializes the Decoder variables.
+           We use a GRU as our internal RNN, the output of each time-step
+           is passed through a Linear layer and Softmax is applied to
+           sample the next word.
+        """
         super(DecoderRNN, self).__init__()
         self.n_layers = n_layers
         self.hidden_size = hidden_size
@@ -398,6 +443,13 @@ class DecoderRNN(nn.Module):
         self.softmax = nn.LogSoftmax()
 
     def forward(self, input, hidden):
+        """Implements the forward pass of the Decoder neural network.
+
+        Steps:
+          1. Apply embedding
+          2. For each layer, apply RELU to the input and pass through GRU
+          3. For our last output, pass it through our linear layer and apply softmax
+        """
         output = self.embedding(input).view(1, 1, -1)
         for i in range(self.n_layers):
             output = F.relu(output)
@@ -406,6 +458,8 @@ class DecoderRNN(nn.Module):
         return output, hidden
 
     def initHidden(self):
+        """Initializes the hidden weights of our Decoder.
+        """
         result = Variable(torch.zeros(1, 1, self.hidden_size))
         if use_cuda:
             return result.cuda()
@@ -451,7 +505,25 @@ class DecoderRNN(nn.Module):
 #
 
 class AttnDecoderRNN(nn.Module):
+    """Decoder with a Soft Attention layer, we need to choose how many encoder
+       output vectors we want to use beforehand, this is because we can't handle
+       infinite length sequences.
+
+       This time the hidden state of the Decoder is NOT the context vector from the
+       Encoder, instead we use up to MAX_LENGTH Encoder outputs and multiply that by
+       a set of Attention Weights. 
+    """
     def __init__(self, hidden_size, output_size, n_layers=1, dropout_p=0.1, max_length=MAX_LENGTH):
+        """Initializes all the Attention Decoder variables needed to run the 
+           network forward pass. 
+
+        Keyword Arguments:
+          hidden_size: size of the GRU hidden state
+          output_size: size of the output of the network (also the input since we sample)
+          n_layers: number of layers to use inside GRU
+          dropout_p: network dropout probability
+          max_length: number of encoder outputs to use
+        """
         super(AttnDecoderRNN, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -467,6 +539,13 @@ class AttnDecoderRNN(nn.Module):
         self.out = nn.Linear(self.hidden_size, self.output_size)
 
     def forward(self, input, hidden, encoder_output, encoder_outputs):
+        """Runs the Attention Decoder forward pass.
+
+        Keyword Arguments:
+          input: list of indexes representing the sentence?
+          hidden: the hidden state of the network
+          encoder_outputs: vectors from the encoder outputs up to MAX_LENGTH
+        """
         embedded = self.embedding(input).view(1, 1, -1)
         embedded = self.dropout(embedded)
 
@@ -486,6 +565,8 @@ class AttnDecoderRNN(nn.Module):
         return output, hidden, attn_weights
 
     def initHidden(self):
+        """Initializes the hidden state of the internal GRU network.
+        """
         result = Variable(torch.zeros(1, 1, self.hidden_size))
         if use_cuda:
             return result.cuda()
@@ -512,10 +593,16 @@ class AttnDecoderRNN(nn.Module):
 #
 
 def indexesFromSentence(lang, sentence):
+    """Use a Lang instance to get the indexes for each of our words.
+       Return a list of indexes.
+    """
     return [lang.word2index[word] for word in sentence.split(' ')]
 
 
 def variableFromSentence(lang, sentence):
+    """Converts the output from indexesFromSentence to a torch Variable
+       that we can feed in.
+    """
     indexes = indexesFromSentence(lang, sentence)
     indexes.append(EOS_token)
     result = Variable(torch.LongTensor(indexes).view(-1, 1))
@@ -526,6 +613,8 @@ def variableFromSentence(lang, sentence):
 
 
 def variablesFromPair(pair):
+    """Given a pair of sentence, generate a torch variable of indexes.
+    """
     input_variable = variableFromSentence(input_lang, pair[0])
     target_variable = variableFromSentence(output_lang, pair[1])
     return (input_variable, target_variable)
@@ -538,7 +627,7 @@ def variablesFromPair(pair):
 # To train we run the input sentence through the encoder, and keep track
 # of every output and the latest hidden state. Then the decoder is given
 # the ``<SOS>`` token as its first input, and the last hidden state of the
-# decoder as its first hidden state.
+# decoder as its first hidstate.
 #
 # "Teacher forcing" is the concept of using the real target outputs as
 # each next input, instead of using the decoder's guess as the next input.
@@ -562,6 +651,18 @@ teacher_forcing_ratio = 0.5
 
 
 def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length=MAX_LENGTH):
+    """Main training routine for our network.
+
+    Keyword Arguments:
+      input_variable: inputs to our network
+      target_variable: what we're trying to match
+      encoder: Encoder instance
+      decoder: Decoder or AttnDecoder instance
+      encoder_optimizer: how to optimize our Encoder
+      decoder_optimizer: how to optimize the Decoder
+      criterion: our loss mechanism
+      max_length: how many encoder outputs to use when applying attention
+    """
     encoder_hidden = encoder.initHidden()
 
     encoder_optimizer.zero_grad()
@@ -628,12 +729,16 @@ import math
 
 
 def asMinutes(s):
+    """Given seconds, it prints both minutes and seconds.
+    """
     m = math.floor(s / 60)
     s -= m * 60
     return '%dm %ds' % (m, s)
 
 
 def timeSince(since, percent):
+    """Prints the time since some start time.
+    """
     now = time.time()
     s = now - since
     es = s / (percent)
@@ -654,6 +759,8 @@ def timeSince(since, percent):
 #
 
 def trainEpochs(encoder, decoder, n_epochs, print_every=1000, plot_every=100, learning_rate=0.01):
+    """Trains our network for a total n_epochs over our data.
+    """
     start = time.time()
     plot_losses = []
     print_loss_total = 0  # Reset every print_every
@@ -723,6 +830,9 @@ def showPlot(points):
 #
 
 def evaluate(encoder, decoder, sentence, max_length=MAX_LENGTH):
+    """Evaluates the network, essentially the test run of our network.
+       Same as training but we feed output back as input to our decoder.
+    """
     input_variable = variableFromSentence(input_lang, sentence)
     input_length = input_variable.size()[0]
     encoder_hidden = encoder.initHidden()
