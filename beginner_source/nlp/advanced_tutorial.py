@@ -3,7 +3,7 @@ r"""
 Advanced: Making Dynamic Decisions and the Bi-LSTM CRF
 ======================================================
 
-Dyanmic versus Static Deep Learning Toolkits
+Dynamic versus Static Deep Learning Toolkits
 --------------------------------------------
 
 Pytorch is a *dynamic* neural network kit. Another example of a dynamic
@@ -177,11 +177,16 @@ class BiLSTM_CRF(nn.Module):
         self.transitions = nn.Parameter(
             torch.randn(self.tagset_size, self.tagset_size))
 
+        # These two statements enforce the constraint that we never transfer
+        # to the start tag and we never transfer from the stop tag 
+        self.transitions.data[tag_to_ix[START_TAG], :] = -10000
+        self.transitions.data[:, tag_to_ix[STOP_TAG]] = -10000
+
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
-        return (autograd.Variable(torch.randn(2, 1, self.hidden_dim)),
-                autograd.Variable(torch.randn(2, 1, self.hidden_dim)))
+        return (autograd.Variable(torch.randn(2, 1, self.hidden_dim // 2)),
+                autograd.Variable(torch.randn(2, 1, self.hidden_dim // 2)))
 
     def _forward_alg(self, feats):
         # Do the forward algorithm to compute the partition function
@@ -217,7 +222,7 @@ class BiLSTM_CRF(nn.Module):
     def _get_lstm_features(self, sentence):
         self.hidden = self.init_hidden()
         embeds = self.word_embeds(sentence).view(len(sentence), 1, -1)
-        lstm_out, self.hidden = self.lstm(embeds)
+        lstm_out, self.hidden = self.lstm(embeds, self.hidden)
         lstm_out = lstm_out.view(len(sentence), self.hidden_dim)
         lstm_feats = self.hidden2tag(lstm_out)
         return lstm_feats
@@ -277,14 +282,12 @@ class BiLSTM_CRF(nn.Module):
         return path_score, best_path
 
     def neg_log_likelihood(self, sentence, tags):
-        self.hidden = self.init_hidden()
         feats = self._get_lstm_features(sentence)
         forward_score = self._forward_alg(feats)
         gold_score = self._score_sentence(feats, tags)
         return forward_score - gold_score
 
     def forward(self, sentence):  # dont confuse this with _forward_alg above.
-        self.hidden = self.init_hidden()
         # Get the emission scores from the BiLSTM
         lstm_feats = self._get_lstm_features(sentence)
 

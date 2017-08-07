@@ -627,7 +627,7 @@ def variablesFromPair(pair):
 # To train we run the input sentence through the encoder, and keep track
 # of every output and the latest hidden state. Then the decoder is given
 # the ``<SOS>`` token as its first input, and the last hidden state of the
-# decoder as its first hidstate.
+# encoder as its first hidden state.
 #
 # "Teacher forcing" is the concept of using the real target outputs as
 # each next input, instead of using the decoder's guess as the next input.
@@ -693,7 +693,7 @@ def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, 
         for di in range(target_length):
             decoder_output, decoder_hidden, decoder_attention = decoder(
                 decoder_input, decoder_hidden, encoder_output, encoder_outputs)
-            loss += criterion(decoder_output[0], target_variable[di])
+            loss += criterion(decoder_output, target_variable[di])
             decoder_input = target_variable[di]  # Teacher forcing
 
     else:
@@ -707,7 +707,7 @@ def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, 
             decoder_input = Variable(torch.LongTensor([[ni]]))
             decoder_input = decoder_input.cuda() if use_cuda else decoder_input
             
-            loss += criterion(decoder_output[0], target_variable[di])
+            loss += criterion(decoder_output, target_variable[di])
             if ni == EOS_token:
                 break
 
@@ -755,12 +755,10 @@ def timeSince(since, percent):
 # -  Start empty losses array for plotting
 #
 # Then we call ``train`` many times and occasionally print the progress (%
-# of epochs, time so far, estimated time) and average loss.
+# of examples, time so far, estimated time) and average loss.
 #
 
-def trainEpochs(encoder, decoder, n_epochs, print_every=1000, plot_every=100, learning_rate=0.01):
-    """Trains our network for a total n_epochs over our data.
-    """
+def trainIters(encoder, decoder, n_iters, print_every=1000, plot_every=100, learning_rate=0.01):
     start = time.time()
     plot_losses = []
     print_loss_total = 0  # Reset every print_every
@@ -769,11 +767,11 @@ def trainEpochs(encoder, decoder, n_epochs, print_every=1000, plot_every=100, le
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
     training_pairs = [variablesFromPair(random.choice(pairs))
-                      for i in range(n_epochs)]
+                      for i in range(n_iters)]
     criterion = nn.NLLLoss()
 
-    for epoch in range(1, n_epochs + 1):
-        training_pair = training_pairs[epoch - 1]
+    for iter in range(1, n_iters + 1):
+        training_pair = training_pairs[iter - 1]
         input_variable = training_pair[0]
         target_variable = training_pair[1]
  
@@ -782,13 +780,13 @@ def trainEpochs(encoder, decoder, n_epochs, print_every=1000, plot_every=100, le
         print_loss_total += loss
         plot_loss_total += loss
 
-        if epoch % print_every == 0:
+        if iter % print_every == 0:
             print_loss_avg = print_loss_total / print_every
             print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, epoch / n_epochs),
-                                         epoch, epoch / n_epochs * 100, print_loss_avg))
+            print('%s (%d %d%%) %.4f' % (timeSince(start, iter / n_iters),
+                                         iter, iter / n_iters * 100, print_loss_avg))
 
-        if epoch % plot_every == 0:
+        if iter % plot_every == 0:
             plot_loss_avg = plot_loss_total / plot_every
             plot_losses.append(plot_loss_avg)
             plot_loss_total = 0
@@ -903,7 +901,7 @@ def evaluateRandomly(encoder, decoder, n=10):
 # .. Note:: 
 #    If you run this notebook you can train, interrupt the kernel,
 #    evaluate, and continue training later. Comment out the lines where the
-#    encoder and decoder are initialized and run ``trainEpochs`` again.
+#    encoder and decoder are initialized and run ``trainIters`` again.
 #
 
 hidden_size = 256
@@ -915,7 +913,7 @@ if use_cuda:
     encoder1 = encoder1.cuda()
     attn_decoder1 = attn_decoder1.cuda()
 
-trainEpochs(encoder1, attn_decoder1, 75000, print_every=5000)
+trainIters(encoder1, attn_decoder1, 75000, print_every=5000)
 
 ######################################################################
 #
@@ -994,7 +992,7 @@ evaluateAndShowAttention("c est un jeune directeur plein de talent .")
 #    -  Chat → Response
 #    -  Question → Answer
 #
-# -  Replace the embedding pre-trained word embeddings such as word2vec or
+# -  Replace the embeddings with pre-trained word embeddings such as word2vec or
 #    GloVe
 # -  Try with more layers, more hidden units, and more sentences. Compare
 #    the training time and results.
